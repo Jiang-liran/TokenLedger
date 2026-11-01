@@ -15,8 +15,10 @@ import type {
   PriceTable,
   PricingSnapshot,
   ProviderId,
+  RequestPurpose,
   RequestStatus,
   Role,
+  TitleSource,
   StoredMessage,
   StoredTurn,
   TurnStatus,
@@ -56,6 +58,10 @@ function mapConversation(row: Row): Conversation {
     defaultProvider: text(row.default_provider) as ProviderId,
     defaultModel: text(row.default_model),
     systemPrompt: textOrNull(row.system_prompt),
+    titleSource: (textOrNull(row.title_source) ?? 'default') as TitleSource,
+    titleVersion: number(row.title_version) || 1,
+    titleGeneratedAt: textOrNull(row.title_generated_at),
+    autoTitleAttemptedAt: textOrNull(row.auto_title_attempted_at),
   };
 }
 
@@ -137,10 +143,11 @@ function mapRequest(row: Row): ApiRequestRecord {
     id: text(row.id),
     providerRequestId: textOrNull(row.provider_request_id),
     conversationId: text(row.conversation_id),
-    turnId: text(row.turn_id),
+    turnId: textOrNull(row.turn_id),
     assistantMessageId: textOrNull(row.assistant_message_id),
     provider: text(row.provider) as ProviderId,
     model: text(row.model),
+    requestPurpose: (textOrNull(row.request_purpose) ?? 'chat') as RequestPurpose,
     startedAt: text(row.started_at),
     endedAt: textOrNull(row.ended_at),
     status: text(row.status) as RequestStatus,
@@ -200,8 +207,9 @@ export interface NewTurnInput {
 export interface RequestStartInput {
   id: string;
   conversationId: string;
-  turnId: string;
-  assistantMessageId: string;
+  turnId: string | null;
+  assistantMessageId: string | null;
+  purpose?: RequestPurpose;
   provider: ProviderId;
   model: string;
   startedAt: string;
@@ -394,12 +402,103 @@ export class Store {
     return number(row?.c);
   }
 
+  /** 用户手动重命名：标记 manual 并递增版本，避免自动标题覆盖。 */
   renameConversation(id: string, title: string): void {
     const now = new Date().toISOString();
     const result = this.database.db
-      .prepare(`UPDATE conversations SET title = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`)
+      .prepare(
+        `UPDATE conversations
+         SET title = ?, title_source = 'manual', title_version = title_version + 1, updated_at = ?
+         WHERE id = ? AND deleted_at IS NULL`,
+      )
       .run(title.trim().slice(0, 160) || '未命名对话', now, id);
     if (result.changes === 0) throw new Error('会话不存在');
+  }
+
+  /** 自动标题尝试标记；只有第一次能成功，防止重复自动请求。 */
+  markAutoTitleAttempted(id: string, now = new Date().toISOString()): boolean {
+    const result = this.database.db
+      .prepare(
+        `UPDATE conversations
+         SET auto_title_attempted_at = ?, updated_at = ?
+         WHERE id = ? AND deleted_at IS NULL
+           AND auto_title_attempted_at IS NULL
+           AND title_source <> 'manual'`,
+      )
+      .run(now, now, id);
+    return Number(result.changes) > 0;
+  }
+
+  /**
+   * 乐观并发更新 AI 标题：
+   * - expectedVersion 在请求开始时捕获，用户手动重命名会递增版本，从而阻止覆盖；
+   * - auto 模式还要求标题不是 manual；manual 模式由用户显式触发，可以覆盖。
+   */
+  setGeneratedTitle(
+    id: string,
+    title: string,
+    expectedVersion: number,
+    source: Extract<TitleSource, 'ai_auto' | 'ai_manual'>,
+    allowManualOverride: boolean,
+    now = new Date().toISOString(),
+  ): boolean {
+    const manualGuard = allowManualOverride ? '' : "AND title_source IN ('default','first_message')";
+    const result = this.database.db
+      .prepare(
+        `UPDATE conversations
+         SET title = ?, title_source = ?, title_version = title_version + 1,
+             title_generated_at = ?, updated_at = ?
+         WHERE id = ? AND title_version = ? AND deleted_at IS NULL ${manualGuard}`,
+      )
+      .run(title.trim().slice(0, 160) || '新对话', source, now, now, id, expectedVersion);
+    return Number(result.changes) > 0;
+  }
+
+  /** 自动标题失败/关闭时使用首条用户消息作为本地备用标题。 */
+  setFallbackTitle(
+    id: string,
+    title: string,
+    expectedVersion: number,
+    now = new Date().toISOString(),
+  ): boolean {
+    const result = this.database.db
+      .prepare(
+        `UPDATE conversations
+         SET title = ?, title_source = 'first_message', title_version = title_version + 1, updated_at = ?
+         WHERE id = ? AND title_version = ? AND deleted_at IS NULL
+           AND title_source IN ('default', 'first_message')`,
+      )
+      .run(title.trim().slice(0, 160) || '新对话', now, id, expectedVersion);
+    return Number(result.changes) > 0;
+  }
+
+  /**
+   * 修复应用在自动标题过程中退出而留下的占位标题。
+   * 只处理仍为 default 的会话，不触碰 AI/手动标题。
+   */
+  repairDefaultTitles(): number {
+    const rows = this.database.db
+      .prepare(
+        `SELECT c.id, c.title_version, m.content
+         FROM conversations c
+         JOIN messages m ON m.id = (
+           SELECT id FROM messages
+           WHERE conversation_id = c.id AND role = 'user'
+           ORDER BY created_at ASC, rowid ASC LIMIT 1
+         )
+         WHERE c.deleted_at IS NULL
+           AND c.title_source = 'default'
+           AND c.auto_title_attempted_at IS NOT NULL`,
+      )
+      .all() as Row[];
+    let repaired = 0;
+    for (const row of rows) {
+      const content = text(row.content).replace(/\s+/g, ' ').trim();
+      if (!content) continue;
+      const title = content.slice(0, 24);
+      if (this.setFallbackTitle(text(row.id), title, number(row.title_version))) repaired += 1;
+    }
+    return repaired;
   }
 
   archiveConversation(id: string, archived: boolean): void {
@@ -521,15 +620,41 @@ export class Store {
       .prepare(
         `SELECT * FROM messages
          WHERE conversation_id = ?
-           AND superseded_at IS NULL
            AND role IN ('user','assistant')
-           AND (role = 'user' OR status = 'complete')
            AND content <> ''
          ORDER BY created_at ASC, rowid ASC`,
       )
       .all(conversationId) as Row[];
+    const messages = rows.map(mapMessage);
     const excluded = new Set(excludeMessageIds);
-    return rows.map(mapMessage).filter((message) => !excluded.has(message.id));
+
+    // 只把“已有成功完成回答”的轮次纳入后续上下文。
+    // 中止/失败/中断的轮次若把孤立的用户消息重发，会让模型看到没有回答的半轮对话，
+    // 也可能把用户已经放弃的问题带入后续请求，因此整轮排除。
+    const byTurn = new Map<string, StoredMessage[]>();
+    for (const message of messages) {
+      if (!message.turnId) continue;
+      const list = byTurn.get(message.turnId) ?? [];
+      list.push(message);
+      byTurn.set(message.turnId, list);
+    }
+
+    const context: StoredMessage[] = [];
+    for (const turnMessages of byTurn.values()) {
+      const user = turnMessages.find((message) => message.role === 'user' && !message.supersededAt);
+      const assistants = turnMessages.filter(
+        (message) =>
+          message.role === 'assistant' &&
+          message.status === 'complete' &&
+          !message.supersededAt,
+      );
+      if (!user || assistants.length === 0) continue;
+      if (!excluded.has(user.id)) context.push(user);
+      for (const assistant of assistants) {
+        if (!excluded.has(assistant.id)) context.push(assistant);
+      }
+    }
+    return context.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
   updateAssistantMessage(
@@ -620,10 +745,10 @@ export class Store {
       .prepare(
         `INSERT INTO api_requests
           (id, provider_request_id, conversation_id, turn_id, assistant_message_id, provider, model,
-           started_at, ended_at, status, request_parameters, raw_usage, normalized_usage,
+           request_purpose, started_at, ended_at, status, request_parameters, raw_usage, normalized_usage,
            pricing_snapshot_id, cost_amount, cost_currency, cost_usd, exchange_rate_snapshot_id,
            calculation_status, pricing_basis, error_details, created_at)
-         VALUES (?, NULL, ?, ?, ?, ?, ?, ?, NULL, 'streaming', ?, NULL, NULL, ?, NULL, NULL, NULL, NULL, 'unknown', ?, NULL, ?)`,
+         VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, 'streaming', ?, NULL, NULL, ?, NULL, NULL, NULL, NULL, 'unknown', ?, NULL, ?)`,
       )
       .run(
         input.id,
@@ -632,6 +757,7 @@ export class Store {
         input.assistantMessageId,
         input.provider,
         input.model,
+        input.purpose ?? 'chat',
         input.startedAt,
         input.requestParameters,
         input.pricingSnapshotId,
@@ -671,6 +797,18 @@ export class Store {
     return row ? mapRequest(row) : null;
   }
 
+  getApiRequestRow(id: string): ApiRequestRow | null {
+    const row = this.database.db
+      .prepare(
+        `SELECT r.*, ps.pricing_version
+         FROM api_requests r
+         LEFT JOIN pricing_snapshots ps ON ps.id = r.pricing_snapshot_id
+         WHERE r.id = ?`,
+      )
+      .get(id) as Row | undefined;
+    return row ? this.mapApiRequestRow(row) : null;
+  }
+
   listRequestsForTurn(turnId: string): ApiRequestRow[] {
     const rows = this.database.db
       .prepare(
@@ -692,6 +830,7 @@ export class Store {
       model: text(row.model),
       startedAt: text(row.started_at),
       status: text(row.status) as RequestStatus,
+      requestPurpose: (textOrNull(row.request_purpose) ?? 'chat') as RequestPurpose,
       inputTokens: usage?.inputTokens ?? null,
       cacheReadTokens: usage?.cacheReadTokens ?? null,
       cacheWriteTokens: usage?.cacheWriteTokens ?? null,
@@ -1060,6 +1199,7 @@ export class Store {
     to?: string | null;
     provider?: ProviderId | null;
     model?: string | null;
+    purpose?: RequestPurpose | null;
   }): StatRequest[] {
     const clauses: string[] = [];
     const params: (string | number)[] = [];
@@ -1083,12 +1223,17 @@ export class Store {
       clauses.push('r.model = ?');
       params.push(options.model);
     }
+    if (options.purpose) {
+      clauses.push('r.request_purpose = ?');
+      params.push(options.purpose);
+    }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const rows = this.database.db
       .prepare(
         `SELECT r.id, r.conversation_id, c.title AS conversation_title, r.turn_id, r.provider, r.model,
-                r.started_at, r.status, r.normalized_usage, r.cost_amount, r.cost_currency, r.cost_usd,
-                r.calculation_status, r.pricing_snapshot_id, ps.pricing_version, r.pricing_basis, r.error_details
+                r.request_purpose, r.started_at, r.status, r.normalized_usage, r.cost_amount,
+                r.cost_currency, r.cost_usd, r.calculation_status, r.pricing_snapshot_id,
+                ps.pricing_version, r.pricing_basis, r.error_details
          FROM api_requests r
          JOIN conversations c ON c.id = r.conversation_id
          LEFT JOIN pricing_snapshots ps ON ps.id = r.pricing_snapshot_id
@@ -1100,9 +1245,10 @@ export class Store {
       id: text(row.id),
       conversationId: text(row.conversation_id),
       conversationTitle: text(row.conversation_title),
-      turnId: text(row.turn_id),
+      turnId: textOrNull(row.turn_id),
       provider: text(row.provider) as ProviderId,
       model: text(row.model),
+      requestPurpose: (textOrNull(row.request_purpose) ?? 'chat') as RequestPurpose,
       startedAt: text(row.started_at),
       status: text(row.status) as RequestStatus,
       usage: parseStoredUsage(textOrNull(row.normalized_usage)),
@@ -1122,8 +1268,9 @@ export class Store {
     to: string | null,
     provider: ProviderId | null = null,
     model: string | null = null,
+    purpose: RequestPurpose | null = null,
   ): GlobalStats {
-    const rows = this.loadStatRequests({ from, to, provider, model });
+    const rows = this.loadStatRequests({ from, to, provider, model, purpose });
     const conversationIds = new Set(rows.map((row) => row.conversationId));
     return buildGlobalStats(rows, { from, to, conversationCount: conversationIds.size });
   }

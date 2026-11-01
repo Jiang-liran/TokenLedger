@@ -97,8 +97,8 @@ export function conversationToMarkdown(bundle: ConversationExportBundle): string
     lines.push(`**本轮统计**：${turnCostLine(turn)}`);
     lines.push('');
     if (turn.requests.length > 0) {
-      lines.push('| 请求 ID | 时间 | 模型 | 状态 | 输入 | 缓存读取 | 输出 | 费用 | 价格版本 |');
-      lines.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+      lines.push('| 请求 ID | 用途 | 时间 | 模型 | 状态 | 输入 | 缓存读取 | 输出 | 费用 | 价格版本 |');
+      lines.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
       for (const request of turn.requests) {
         const pricing = pricingFor(bundle, request);
         const cost =
@@ -110,7 +110,7 @@ export function conversationToMarkdown(bundle: ConversationExportBundle): string
                 request.costUsd,
               );
         lines.push(
-          `| ${request.id} | ${formatDateTime(request.startedAt)} | ${request.provider}/${request.model} | ${request.status} | ${formatTokens(
+          `| ${request.id} | ${request.requestPurpose === 'title_generation' ? 'AI 命名' : '聊天'} | ${formatDateTime(request.startedAt)} | ${request.provider}/${request.model} | ${request.status} | ${formatTokens(
             request.inputTokens,
           )} | ${formatTokens(request.cacheReadTokens)} | ${formatTokens(request.outputTokens)} | ${cost} | ${
             pricing?.pricingVersion ?? request.pricingVersion ?? '—'
@@ -172,6 +172,7 @@ export function requestsToCsv(rows: StatRequest[]): string {
     'conversation_title',
     'provider',
     'model',
+    'request_purpose',
     'started_at',
     'status',
     'input_tokens',
@@ -198,6 +199,7 @@ export function requestsToCsv(rows: StatRequest[]): string {
         row.conversationTitle,
         row.provider,
         row.model,
+        row.requestPurpose,
         row.startedAt,
         row.status,
         row.usage?.inputTokens ?? '',

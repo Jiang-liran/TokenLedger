@@ -7,6 +7,7 @@ import {
   FileJson,
   MoreHorizontal,
   Pencil,
+  Sparkles,
   Trash2,
   XCircle,
 } from 'lucide-react';
@@ -30,6 +31,8 @@ export function ChatHeader() {
   const exportMarkdown = useAppStore((state) => state.exportConversationMarkdown);
   const exportJson = useAppStore((state) => state.exportConversationJson);
   const askConfirm = useAppStore((state) => state.askConfirm);
+  const titleJobs = useAppStore((state) => state.titleJobs);
+  const regenerateTitle = useAppStore((state) => state.regenerateTitle);
 
   const [modelOpen, setModelOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
@@ -45,11 +48,15 @@ export function ChatHeader() {
   }, [modelsByProvider, provider, model]);
 
   const displayTitle = conversation?.title ?? (activeId ? '对话' : '新对话');
+  const titleBusy = activeId ? !!titleJobs[activeId] : false;
 
   return (
     <header className="chat-header">
       <div className="chat-header-title">
-        <h1 title={displayTitle}>{displayTitle}</h1>
+        <h1 title={displayTitle}>
+          {displayTitle}
+          {titleBusy ? <span className="ml-2 text-[10.5px] font-normal text-[var(--text-tertiary)]">AI 命名中…</span> : null}
+        </h1>
         <div className="chat-header-sub">
           <span
             className="status-dot"
@@ -102,7 +109,19 @@ export function ChatHeader() {
         >
           <MoreHorizontal size={16} />
         </button>
-        <Popover open={menuOpen} onClose={() => setMenuOpen(false)} align="right" width={220}>
+        <Popover open={menuOpen} onClose={() => setMenuOpen(false)} align="right" width={240}>
+          <button
+            className="menu-item"
+            disabled={!conversation || titleBusy}
+            onClick={() => {
+              if (!conversation) return;
+              setMenuOpen(false);
+              void regenerateTitle(conversation.id);
+            }}
+          >
+            <Sparkles size={13} /> {titleBusy ? 'AI 正在生成标题…' : 'AI 重新生成标题'}
+          </button>
+          <div className="menu-sep" />
           <button
             className="menu-item"
             disabled={!conversation}

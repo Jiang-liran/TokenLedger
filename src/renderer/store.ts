@@ -12,6 +12,7 @@ import type {
   KeyStatusResponse,
   ModelListResult,
   ProviderId,
+  TitleEvent,
 } from '../shared/types';
 import type { PriceOverrideRow, PricingCatalogResponse } from '../shared/ipc';
 import type { AppSettings } from '../shared/settings';
@@ -54,12 +55,13 @@ interface AppState {
   pricing: PricingCatalogResponse | null;
   holidays: HolidayRuleInfo | null;
   generating: { requestId: string; conversationId: string; turnId: string; assistantMessageId: string } | null;
+  titleJobs: Record<string, boolean>;
   activeRequests: Record<string, { conversationId: string; turnId: string; assistantMessageId: string }>;
   streamText: Record<string, { text: string; reasoning: string }>;
   pendingByRequest: Record<string, { text: string; reasoning: string }>;
   usage: GlobalStats | null;
   usageRange: TimeRange;
-  usageFilter: { provider: ProviderId | null; model: string | null };
+  usageFilter: { provider: ProviderId | null; model: string | null; purpose: 'chat' | 'title_generation' | null };
   usageLoading: boolean;
   search: string;
   error: string | null;
@@ -107,7 +109,7 @@ interface AppState {
   ) => Promise<void>;
   loadUsage: (preset: RangePreset, fromDate?: string, toDate?: string) => Promise<void>;
   refreshUsage: () => Promise<void>;
-  setUsageFilter: (filter: Partial<{ provider: ProviderId | null; model: string | null }>) => void;
+  setUsageFilter: (filter: Partial<{ provider: ProviderId | null; model: string | null; purpose: 'chat' | 'title_generation' | null }>) => void;
   exportConversationMarkdown: () => Promise<void>;
   exportConversationJson: () => Promise<void>;
   exportStatsCsv: () => Promise<void>;
@@ -123,6 +125,8 @@ interface AppState {
   refreshBalance: () => Promise<void>;
   closeBalance: () => void;
   handleChatEvent: (event: ChatStreamEvent) => void;
+  handleTitleEvent: (event: TitleEvent) => void;
+  regenerateTitle: (conversationId?: string) => Promise<void>;
   flushDeltas: () => void;
   setSearch: (search: string) => void;
   setIncludeArchived: (include: boolean) => void;
@@ -217,12 +221,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
   pricing: null,
   holidays: null,
   generating: null,
+  titleJobs: {},
   activeRequests: {},
   streamText: {},
   pendingByRequest: {},
   usage: null,
   usageRange: computePresetRange('today'),
-  usageFilter: { provider: null, model: null },
+  usageFilter: { provider: null, model: null, purpose: null },
   usageLoading: false,
   search: '',
   error: null,
@@ -444,6 +449,93 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
   },
 
+  regenerateTitle: async (conversationId) => {
+    const id = conversationId ?? get().activeId;
+    if (!id) {
+      get().pushToast('error', '请先选择一个会话。');
+      return;
+    }
+    if (get().titleJobs[id]) {
+      get().pushToast('info', '标题正在生成中，请稍后再试。');
+      return;
+    }
+    set((state) => ({ titleJobs: { ...state.titleJobs, [id]: true } }));
+    try {
+      // 成功/失败反馈由 title:event 统一处理，避免手动操作出现重复提示。
+      await api().regenerateTitle(id);
+    } catch (error) {
+      set((state) => ({ titleJobs: { ...state.titleJobs, [id]: false } }));
+      get().pushToast('error', errorMessage(error));
+    }
+  },
+
+  handleTitleEvent: (event) => {
+    const current = get();
+    if (event.type === 'started') {
+      set((state) => ({ titleJobs: { ...state.titleJobs, [event.conversationId]: true } }));
+      return;
+    }
+    if (event.type === 'completed') {
+      set((state) => ({
+        titleJobs: { ...state.titleJobs, [event.conversationId]: false },
+        conversations: state.conversations.map((conversation) =>
+          conversation.id === event.conversationId && event.applied
+            ? { ...conversation, title: event.title }
+            : conversation,
+        ),
+        detail:
+          state.detail &&
+          state.detail.conversation.id === event.conversationId &&
+          event.applied
+            ? {
+                ...state.detail,
+                conversation: { ...state.detail.conversation, title: event.title },
+                stats: event.conversationStats,
+              }
+            : state.detail,
+      }));
+      void get().refreshConversations();
+      if (current.activeId === event.conversationId) {
+        void get().loadDetail(event.conversationId);
+      }
+      if (event.mode === 'manual') {
+        get().pushToast(
+          'success',
+          event.applied
+            ? `标题已更新为「${event.title}」，本次标题请求费用已记录`
+            : '标题已生成但未覆盖手动标题，请求费用已记录',
+        );
+      }
+      return;
+    }
+    if (event.type === 'fallback') {
+      set((state) => ({
+        conversations: state.conversations.map((conversation) =>
+          conversation.id === event.conversationId
+            ? { ...conversation, title: event.title }
+            : conversation,
+        ),
+        detail:
+          state.detail && state.detail.conversation.id === event.conversationId
+            ? {
+                ...state.detail,
+                conversation: { ...state.detail.conversation, title: event.title },
+              }
+            : state.detail,
+      }));
+      void get().refreshConversations();
+      return;
+    }
+    if (event.type === 'failed') {
+      set((state) => ({
+        titleJobs: { ...state.titleJobs, [event.conversationId]: false },
+      }));
+      if (event.mode === 'manual') get().pushToast('error', event.message);
+      void get().refreshConversations();
+      if (current.activeId === event.conversationId) void get().loadDetail(event.conversationId);
+    }
+  },
+
   stopGeneration: async () => {
     const generating = get().generating;
     if (!generating) return;
@@ -657,6 +749,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         to: range.to,
         provider: filter.provider,
         model: filter.model,
+        purpose: filter.purpose,
       });
       set({ usage, usageLoading: false });
     } catch (error) {
@@ -675,6 +768,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         to: range.to,
         provider: filter.provider,
         model: filter.model,
+        purpose: filter.purpose,
       });
       set({ usage, usageLoading: false });
     } catch (error) {

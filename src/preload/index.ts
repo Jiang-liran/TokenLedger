@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { IPC, type TokenLedgerApi } from '../shared/ipc';
-import type { BudgetAlert, ChatStreamEvent } from '../shared/types';
+import type { BudgetAlert, ChatStreamEvent, TitleEvent } from '../shared/types';
 
 const invoke = <T>(channel: string, payload?: unknown): Promise<T> =>
   ipcRenderer.invoke(channel, payload) as Promise<T>;
@@ -46,11 +46,19 @@ const api: TokenLedgerApi = {
   deleteAllData: (confirmText) => invoke(IPC.dataDeleteAll, { confirmText }),
   openExternal: (url) => invoke(IPC.externalOpen, { url }),
   getRecentRequests: (limit) => invoke(IPC.requestsRecent, { limit }),
+  regenerateTitle: (conversationId) => invoke(IPC.titleRegenerate, { conversationId }),
   onChatEvent: (listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, payload: ChatStreamEvent) => listener(payload);
     ipcRenderer.on(IPC.chatEvent, wrapped);
     return () => {
       ipcRenderer.removeListener(IPC.chatEvent, wrapped);
+    };
+  },
+  onTitleEvent: (listener) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: TitleEvent) => listener(payload);
+    ipcRenderer.on(IPC.titleEvent, wrapped);
+    return () => {
+      ipcRenderer.removeListener(IPC.titleEvent, wrapped);
     };
   },
   onBudgetAlert: (listener) => {

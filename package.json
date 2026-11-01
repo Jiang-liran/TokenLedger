@@ -1,7 +1,7 @@
 {
   "name": "tokenledger",
   "productName": "TokenLedger",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "TokenLedger — 面向 OpenAI 与 DeepSeek 的 macOS AI 聊天客户端，精确追踪每次请求、每轮问答、每个会话与全局费用。",
   "main": "dist/main/index.js",
   "author": "TokenLedger",

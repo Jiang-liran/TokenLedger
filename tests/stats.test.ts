@@ -2,7 +2,7 @@ import Decimal from 'decimal.js';
 import { describe, expect, it } from 'vitest';
 import { aggregateTotals, buildConversationStats, buildGlobalStats, localDateKey } from '../src/shared/stats';
 import { makeStatRequest } from './helpers';
-import { usageFromDeepSeek } from './helpers';
+import { usageFromDeepSeek, usageFromOpenAI } from './helpers';
 
 const deepseekUsage = usageFromDeepSeek();
 
@@ -128,6 +128,36 @@ describe('全局统计', () => {
     expect(stats.byProvider.find((item) => item.provider === 'deepseek')?.requestCount).toBe(1);
     expect(stats.byModel).toHaveLength(2);
     expect(stats.byDay).toHaveLength(1);
+    expect(stats.byPurpose.find((item) => item.purpose === 'chat')?.requestCount).toBe(3);
+    expect(stats.byPurpose.find((item) => item.purpose === 'title_generation')).toBeUndefined();
+  });
+
+  it('按请求用途分别汇总，且用途费用之和与全局一致', () => {
+    const rows = [
+      makeStatRequest(),
+      makeStatRequest({
+        id: 'req_title',
+        requestPurpose: 'title_generation',
+        usage: usageFromOpenAI({
+          input_tokens: 180,
+          input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+          output_tokens: 12,
+          total_tokens: 192,
+        }),
+        costAmount: '0.00048',
+        costUsd: '0.00048',
+      }),
+    ];
+    const stats = buildGlobalStats(rows, { from: null, to: null, conversationCount: 1 });
+    expect(stats.byPurpose).toHaveLength(2);
+    const chat = stats.byPurpose.find((item) => item.purpose === 'chat')!;
+    const title = stats.byPurpose.find((item) => item.purpose === 'title_generation')!;
+    expect(chat.costUsd).toBe('0.00485');
+    expect(title.costUsd).toBe('0.00048');
+    expect(new Decimal(chat.costUsd).plus(title.costUsd).toString()).toBe(stats.costUsd);
+    expect(stats.recentRequests.find((request) => request.id === 'req_title')?.requestPurpose).toBe(
+      'title_generation',
+    );
   });
 
   it('日期分组使用本地日期', () => {

@@ -1,12 +1,14 @@
-import { app, BrowserWindow, Menu, nativeTheme, safeStorage, session } from 'electron';
+import { app, BrowserWindow, dialog, Menu, nativeTheme, safeStorage, session } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { Database } from './db/database';
+import { backupBeforeMigration } from './db/pre-migration';
 import { Store } from './db/repositories';
 import { SecretStore, MemorySecretStore, type EncryptionBackend, type KeyStore } from './services/secrets';
 import { Logger } from './services/logger';
 import { PricingService } from './services/pricing';
 import { ChatService } from './services/chat';
+import { TitleService } from './services/titles';
 import { ModelsService } from './services/models';
 import { BalanceService } from './services/balance';
 import { ExportService } from './services/export';
@@ -14,7 +16,7 @@ import { BackupService } from './services/backup';
 import { registerIpc } from './ipc';
 import { createMockStream } from './services/mock';
 import { IPC } from '../shared/ipc';
-import type { BudgetAlert, ChatStreamEvent } from '../shared/types';
+import type { BudgetAlert, ChatStreamEvent, TitleEvent } from '../shared/types';
 import { APP_VERSION } from '../shared/version';
 
 const TEST_MODE = process.env.TOKENLEDGER_TEST_MODE === '1';
@@ -175,9 +177,21 @@ function buildMenu(): void {
 }
 
 function createServices(): void {
-  database = new Database(path.join(userDataDir, 'tokenledger.db'));
-  const store = new Store(database);
   logger = new Logger(path.join(userDataDir, 'logs'));
+  const dbPath = path.join(userDataDir, 'tokenledger.db');
+  try {
+    const backup = backupBeforeMigration(dbPath, path.join(userDataDir, 'backups'));
+    if (backup) {
+      logger.info('数据库迁移前备份完成', backup);
+    }
+  } catch (error) {
+    logger.error('数据库迁移前备份失败，已中止启动', error);
+    throw new Error(
+      '数据库迁移前备份失败。为避免丢失历史数据，TokenLedger 已停止启动。请检查磁盘空间与数据目录权限后重试。',
+    );
+  }
+  database = new Database(dbPath);
+  const store = new Store(database);
 
   const interrupted = store.markInterrupted();
   if (interrupted.requests > 0 || interrupted.messages > 0) {
@@ -217,6 +231,17 @@ function createServices(): void {
     logger.warn('初始化汇率快照失败', error);
   }
 
+  const mockStream = TEST_MODE ? createMockStream() : undefined;
+  const titleService = new TitleService({
+    store,
+    secrets,
+    pricing,
+    logger,
+    stream: mockStream,
+    emit: (event: TitleEvent) => sendToWindow(IPC.titleEvent, event),
+  });
+  titleService.repairStartupTitles();
+
   chatService = new ChatService({
     store,
     secrets,
@@ -224,7 +249,10 @@ function createServices(): void {
     logger,
     emit: (event: ChatStreamEvent) => sendToWindow(IPC.chatEvent, event),
     emitBudgetAlert: (alert: BudgetAlert) => sendToWindow(IPC.budgetAlert, alert),
-    stream: TEST_MODE ? createMockStream() : undefined,
+    stream: mockStream,
+    onTurnCompleted: (conversationId: string) => {
+      void titleService.handleAutoTitle(conversationId);
+    },
   });
 
   const models = new ModelsService(secrets, pricing);
@@ -238,6 +266,7 @@ function createServices(): void {
     secrets,
     pricing,
     chat: chatService,
+    titles: titleService,
     models,
     balance,
     exporter,
@@ -268,7 +297,17 @@ app.whenReady().then(() => {
   });
   session.defaultSession.setPermissionCheckHandler(() => false);
 
-  createServices();
+  try {
+    createServices();
+  } catch (error) {
+    logger?.error('初始化本地数据服务失败', error);
+    dialog.showErrorBox(
+      'TokenLedger 无法启动',
+      error instanceof Error ? error.message : '初始化本地数据服务失败。',
+    );
+    app.quit();
+    return;
+  }
   buildMenu();
   app.setAboutPanelOptions({
     applicationName: 'TokenLedger',

@@ -26,8 +26,12 @@ export default function App() {
     const offChat = window.tokenledger.onChatEvent((event) =>
       useAppStore.getState().handleChatEvent(event),
     );
+    const offTitle = window.tokenledger.onTitleEvent((event) =>
+      useAppStore.getState().handleTitleEvent(event),
+    );
     return () => {
       offChat();
+      offTitle();
     };
   }, []);
 

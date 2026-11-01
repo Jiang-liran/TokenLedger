@@ -6,7 +6,9 @@ export interface Migration {
   sql: string;
 }
 
-const MIGRATIONS: Migration[] = [
+export const LATEST_SCHEMA_VERSION = 2;
+
+export const MIGRATIONS: Migration[] = [
   {
     version: 1,
     name: 'initial_schema',
@@ -164,6 +166,67 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_requests_started ON api_requests(started_at);
       CREATE INDEX idx_requests_status ON api_requests(status);
       CREATE INDEX idx_fx_fetched ON exchange_rate_snapshots(fetched_at DESC);
+    `,
+  },
+  {
+    version: 2,
+    name: 'ai_titles_and_request_purpose',
+    sql: `
+      ALTER TABLE conversations ADD COLUMN title_source TEXT NOT NULL DEFAULT 'default';
+      ALTER TABLE conversations ADD COLUMN title_version INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE conversations ADD COLUMN title_generated_at TEXT;
+      ALTER TABLE conversations ADD COLUMN auto_title_attempted_at TEXT;
+
+      -- 旧版会话不参与自动标题批量命名；新会话 auto_title_attempted_at 保持 NULL。
+      UPDATE conversations
+      SET title_source = 'first_message',
+          auto_title_attempted_at = COALESCE(created_at, updated_at);
+
+      CREATE TABLE api_requests_v2 (
+        id TEXT PRIMARY KEY,
+        provider_request_id TEXT,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        turn_id TEXT REFERENCES turns(id) ON DELETE CASCADE,
+        assistant_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        request_purpose TEXT NOT NULL DEFAULT 'chat' CHECK (request_purpose IN ('chat','title_generation')),
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        status TEXT NOT NULL,
+        request_parameters TEXT,
+        raw_usage TEXT,
+        normalized_usage TEXT,
+        pricing_snapshot_id TEXT REFERENCES pricing_snapshots(id) ON DELETE SET NULL,
+        cost_amount TEXT,
+        cost_currency TEXT,
+        cost_usd TEXT,
+        exchange_rate_snapshot_id TEXT REFERENCES exchange_rate_snapshots(id) ON DELETE SET NULL,
+        calculation_status TEXT NOT NULL,
+        pricing_basis TEXT,
+        error_details TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      INSERT INTO api_requests_v2
+        (id, provider_request_id, conversation_id, turn_id, assistant_message_id, provider, model,
+         request_purpose, started_at, ended_at, status, request_parameters, raw_usage, normalized_usage,
+         pricing_snapshot_id, cost_amount, cost_currency, cost_usd, exchange_rate_snapshot_id,
+         calculation_status, pricing_basis, error_details, created_at)
+      SELECT id, provider_request_id, conversation_id, turn_id, assistant_message_id, provider, model,
+             'chat', started_at, ended_at, status, request_parameters, raw_usage, normalized_usage,
+             pricing_snapshot_id, cost_amount, cost_currency, cost_usd, exchange_rate_snapshot_id,
+             calculation_status, pricing_basis, error_details, created_at
+      FROM api_requests;
+
+      DROP TABLE api_requests;
+      ALTER TABLE api_requests_v2 RENAME TO api_requests;
+
+      CREATE INDEX idx_requests_conversation ON api_requests(conversation_id, started_at);
+      CREATE INDEX idx_requests_turn ON api_requests(turn_id);
+      CREATE INDEX idx_requests_started ON api_requests(started_at);
+      CREATE INDEX idx_requests_status ON api_requests(status);
+      CREATE INDEX idx_requests_purpose ON api_requests(request_purpose, started_at);
     `,
   },
 ];

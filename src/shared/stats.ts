@@ -7,6 +7,7 @@ import type {
   GlobalStats,
   NormalizedUsage,
   ProviderId,
+  RequestPurpose,
   TimeBucket,
 } from './types';
 import { toDecimalString } from './cost/engine';
@@ -15,9 +16,10 @@ export interface StatRequest {
   id: string;
   conversationId: string;
   conversationTitle: string;
-  turnId: string;
+  turnId: string | null;
   provider: ProviderId;
   model: string;
+  requestPurpose: RequestPurpose;
   startedAt: string;
   status: ApiRequestRow['status'];
   usage: NormalizedUsage | null;
@@ -246,6 +248,10 @@ export function buildGlobalStats(
     string,
     { provider: ProviderId; model: string; requestCount: number; totalTokens: number; costUsd: Decimal; complete: boolean }
   >();
+  const purposeMap = new Map<
+    RequestPurpose,
+    { requestCount: number; totalTokens: number; costUsd: Decimal; complete: boolean }
+  >();
   const conversationMap = new Map<
     string,
     { title: string; requestCount: number; totalTokens: number; costUsd: Decimal; complete: boolean }
@@ -288,6 +294,18 @@ export function buildGlobalStats(
     if (row.costUsd !== null) modelEntry.costUsd = modelEntry.costUsd.plus(row.costUsd);
     else modelEntry.complete = false;
     modelMap.set(modelKey, modelEntry);
+
+    const purposeEntry = purposeMap.get(row.requestPurpose) ?? {
+      requestCount: 0,
+      totalTokens: 0,
+      costUsd: new Decimal(0),
+      complete: true,
+    };
+    purposeEntry.requestCount += 1;
+    purposeEntry.totalTokens += tokenCount;
+    if (row.costUsd !== null) purposeEntry.costUsd = purposeEntry.costUsd.plus(row.costUsd);
+    else purposeEntry.complete = false;
+    purposeMap.set(row.requestPurpose, purposeEntry);
 
     const conversationEntry = conversationMap.get(row.conversationId) ?? {
       title: row.conversationTitle,
@@ -332,6 +350,7 @@ export function buildGlobalStats(
       model: row.model,
       startedAt: row.startedAt,
       status: row.status,
+      requestPurpose: row.requestPurpose,
       inputTokens: row.usage?.inputTokens ?? null,
       cacheReadTokens: row.usage?.cacheReadTokens ?? null,
       cacheWriteTokens: row.usage?.cacheWriteTokens ?? null,
@@ -399,5 +418,12 @@ export function buildGlobalStats(
     byDay,
     byCurrency: nativeCostArray(totals.nativeCosts),
     recentRequests,
+    byPurpose: [...purposeMap.entries()].map(([purpose, entry]) => ({
+      purpose,
+      requestCount: entry.requestCount,
+      totalTokens: entry.totalTokens,
+      costUsd: toDecimalString(entry.costUsd),
+      costUsdComplete: entry.complete,
+    })),
   };
 }

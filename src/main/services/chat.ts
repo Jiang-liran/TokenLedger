@@ -47,6 +47,8 @@ export interface ChatDeps {
   pricing: PricingService;
   emit: (event: ChatStreamEvent) => void;
   emitBudgetAlert?: (alert: BudgetAlert) => void;
+  /** 首轮（或首个成功回复）完成后通知标题服务；不阻塞聊天完成事件。 */
+  onTurnCompleted?: (conversationId: string) => void;
   stream?: StreamFunction;
   now?: () => Date;
   logger?: Logger;
@@ -221,6 +223,7 @@ export class ChatService {
 
     const requestParameters = {
       api: provider === 'openai' ? 'responses' : 'chat.completions',
+      purpose: 'chat',
       model,
       provider,
       stream: true,
@@ -256,6 +259,7 @@ export class ChatService {
         model,
         startedAt,
         requestParameters: JSON.stringify(requestParameters),
+        purpose: 'chat',
         pricingSnapshotId: resolution.snapshot?.id ?? null,
         pricingBasis: resolution.snapshot?.pricingBasis ?? resolution.reason,
       });
@@ -380,6 +384,7 @@ export class ChatService {
         model: modelId,
         startedAt,
         requestParameters: JSON.stringify(requestParameters),
+        purpose: 'chat',
         pricingSnapshotId: resolution.snapshot?.id ?? null,
         pricingBasis: resolution.snapshot?.pricingBasis ?? resolution.reason,
       });
@@ -702,6 +707,14 @@ export class ChatService {
       conversationStats: detail.stats,
       budgetAlerts,
     });
+
+    if (this.deps.onTurnCompleted) {
+      try {
+        this.deps.onTurnCompleted(params.conversation.id);
+      } catch (error) {
+        this.deps.logger?.warn('触发标题生成失败', redact(error));
+      }
+    }
   }
 
   private loadDetail(conversationId: string): ConversationDetail | null {

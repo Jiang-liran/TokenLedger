@@ -1,6 +1,6 @@
 # TokenLedger 技术架构
 
-版本：1.0.0 · 价格核对日期：2026-11-01
+版本：1.0.1 · 价格核对日期：2026-11-01
 
 ## 1. 总体结构
 
@@ -124,8 +124,9 @@ conversations 1 ─── n turns 1 ─── n messages
 |---|---|
 | id | 内部请求 UUID |
 | provider_request_id | 服务商返回的 response id / chat id（若有） |
-| conversation_id / turn_id / assistant_message_id | 归属 |
+| conversation_id / turn_id / assistant_message_id | 归属；手动 AI 标题请求的 turn_id 为 NULL（会话级辅助操作） |
 | provider / model | 当时的服务商与模型 |
+| request_purpose | chat / title_generation | 普通聊天或 AI 标题生成 |
 | started_at / ended_at | UTC ISO |
 | status | streaming / completed / error / aborted / interrupted |
 | request_parameters | JSON：API 类型、上下文条数、截断标记、推理设置、价格快照 ID（不含消息正文） |
@@ -163,6 +164,17 @@ base/quote/rate/source/source_url/effective_at/fetched_at/is_user_configured。�
 - `holiday_overrides`：节假日的 add/remove 覆盖。
 - `cost_recalculation_log`：历史重算审计（请求 ID、新旧费用、新旧快照 ID、原因、时间）。
 - `settings`：单个 `app` JSON（默认模型、上下文上限、汇率、预算、节假日覆盖截止、显示偏好）。
+
+### 迁移 v2 与迁移前备份
+
+`schema_migrations` 当前版本 2。v2 通过事务：
+
+1. 为 `conversations` 增加标题来源、版本、生成时间与自动尝试时间；
+2. 把旧会话标记为 `first_message` 且 `auto_title_attempted_at = created_at`，**不会批量自动重命名**；
+3. 重建 `api_requests`，新增 `request_purpose`（旧行填 `chat`），并允许 `turn_id` 为 NULL 以承载会话级手动标题请求；
+4. 保留所有旧 usage、费用、价格快照与关联 ID。
+
+应用启动时在迁移前调用 `VACUUM INTO` 生成 `backups/pre-migration-v1-*.db` 一致性备份（包含 WAL 已提交数据）。备份失败会中止启动并提示，而不是在不可回退的情况下改库。
 
 ## 4. Usage 规范化
 
@@ -253,7 +265,20 @@ amount = (uncached × P_input
 
 统计不依赖冗余汇总表，直接读取请求行并用 Decimal 聚合，因此不会出现“汇总与明细不一致”。缓存命中率 = 缓存读取 / 输入总量；输入总量包含缓存读取与写入。
 
-## 8. 聊天流程
+## 8. AI 标题生成
+
+`TitleService` 负责自动/手动标题：
+
+- **自动触发**：首轮成功聊天完成后，由 ChatService 通知；`auto_title_attempted_at` 先原子置位，确保每个会话只自动尝试一次。历史会话迁移时已置位，不会批量触发。
+- **目标模型**：默认跟随当前聊天服务商与模型；设置可指定独立模型。关闭“使用当前聊天服务商”且目标服务商不同时，必须显式开启 `allowCrossProvider`，否则不发起请求并使用本地备用标题。
+- **短上下文**：只发送首轮/最近一轮的用户问题与助手回答摘要（各最多约 900 字符），不发送完整历史。
+- **请求与计费**：复用 `api_requests` / usage / pricing snapshot / Decimal 计费；`request_purpose = title_generation`；自动标题关联首轮 `turn_id`，手动标题 `turn_id = NULL`。成功、失败、无 usage、未知价格均保留请求与费用状态。
+- **并发**：每个 conversation 一个内存任务锁；手动请求与自动请求不会重叠。标题更新使用 `title_version` 乐观检查；用户手动改名会递增版本，自动标题无法覆盖。生成过程中删除/归档、切换会话、应用退出均有明确处理；退出后的中断请求由启动恢复逻辑补本地备用标题。
+- **失败回退**：失败/超时/未返回 usage/未授权时使用首条用户消息生成备用标题，不额外调用模型。
+
+标题请求同样进入 Turn（自动）、会话累计与全局按用途统计；手动重新生成标题不计入旧 Turn，但计入会话与全局。
+
+## 9. 聊天流程
 
 ```
 renderer: chat.sendMessage
@@ -275,7 +300,17 @@ renderer: chat.sendMessage
 - 异常：HTTP/网络/流中断分类为中文可读错误；不自动重试，避免服务端已计费时重复扣费。
 - 部分内容每 1.5 秒落库一次，降低异常退出时丢失已接收文本的风险。
 
-## 9. 导出与备份
+## 10. 上下文构造与失败轮次
+
+上下文由本地可见消息构造，不使用任何服务商 `previous_response_id`：
+
+- 只纳入至少有一个 `complete` 且未被 superseded 的助手消息的 Turn；
+- 失败/中止/中断的 Turn 会整轮排除，避免把孤立的用户消息重发成“半轮对话”；
+- 思考内容（DeepSeek `reasoning_content`）不重传；
+- 重新生成时排除被替换的助手消息；
+- 跨服务商切换时仅传 user/assistant 文本，不传服务商响应 ID 或元数据。
+
+## 11. 导出与备份
 
 - 会话 Markdown：包含用户/助手、思考过程（折叠）、本轮统计、逐请求表格、价格版本。
 - 会话 JSON：结构化 messages、requests、usage、价格快照、统计数据。
@@ -283,7 +318,7 @@ renderer: chat.sendMessage
 - 全量备份：固定表白名单 + 元数据；恢复前自动备份当前库；插入时校验表名与列名，拒绝未知结构。
 - 备份明确不含 `secrets.json` 与任何 API Key。
 
-## 10. 错误与恢复
+## 12. 错误与恢复
 
 | 场景 | 行为 |
 |---|---|
@@ -298,9 +333,10 @@ renderer: chat.sendMessage
 | 应用崩溃 | 启动时把 streaming 记录标记 interrupted，已落库文本保留 |
 | 数据库失败 | 事务回滚，界面提示保存失败，不谎报成功 |
 
-## 11. 测试策略
+## 13. 测试策略
 
 - 纯领域单测：usage 规范化、价格匹配、峰谷/节假日、Decimal 计费、统计聚合、请求构造、SSE 解析、错误映射、导出格式、预算、时间范围。
+- 标题专项：单次自动触发、关闭自动、失败回退、并发锁、版本冲突、删除/切换会话、跨服务商授权、独立模型价格、无 usage、迁移后不批量重命名。
 - 传输集成测试：mock `fetch` 返回真实 SSE 形状，验证官方 URL、Authorization、请求体、增量解析、usage、结束事件与错误。
 - 数据库/聊天集成：临时 SQLite + 真实 Store + ChatService + fake stream，覆盖多轮、多服务商、重新生成、未知 usage、错误、中止、重启、软删除、备份恢复、价格快照、历史重算。
 - UI 端到端：Playwright 启动真实 Electron 窗口，使用测试模式模拟流，验证流式增长、费用数值、会话隔离、统计筛选、明暗模式、停止生成、重启持久化、密钥不落盘；输出截图到 `docs/screenshots/`。

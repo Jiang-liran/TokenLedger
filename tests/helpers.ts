@@ -194,6 +194,7 @@ export function makeStatRequest(overrides: Partial<StatRequest> = {}): StatReque
     turnId: 'turn_1',
     provider: 'openai',
     model: 'gpt-6.1-sol',
+    requestPurpose: 'chat',
     startedAt: '2026-11-02T02:00:00.000Z',
     status: 'completed',
     usage: usageFromOpenAI(),

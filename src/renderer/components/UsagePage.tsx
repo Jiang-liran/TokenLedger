@@ -32,6 +32,11 @@ const STATUS_LABEL: Record<string, string> = {
   streaming: '进行中',
 };
 
+const PURPOSE_LABEL: Record<string, string> = {
+  chat: '普通聊天',
+  title_generation: 'AI 标题生成',
+};
+
 function providerLabel(provider: string): string {
   return provider === 'openai' ? 'OpenAI' : 'DeepSeek';
 }
@@ -168,12 +173,11 @@ export function UsagePage() {
   }, [range]);
 
   const hasUnknown = (stats?.unknownCostRequestCount ?? 0) > 0;
-  const filterLabel =
-    usageFilter.provider || usageFilter.model
-      ? `${usageFilter.provider ? providerLabel(usageFilter.provider) : '全部服务商'} · ${
-          usageFilter.model ?? '全部模型'
-        }`
-      : '全部服务商与模型';
+  const filterLabel = [
+    usageFilter.provider ? providerLabel(usageFilter.provider) : '全部服务商',
+    usageFilter.model ?? '全部模型',
+    usageFilter.purpose ? PURPOSE_LABEL[usageFilter.purpose] : '全部用途',
+  ].join(' · ');
 
   return (
     <div className="page">
@@ -228,6 +232,24 @@ export function UsagePage() {
                 <option value="">全部服务商</option>
                 <option value="openai">OpenAI</option>
                 <option value="deepseek">DeepSeek</option>
+              </select>
+            </label>
+            <label className="field">
+              <span className="label">请求用途</span>
+              <select
+                className="select"
+                style={{ width: 170 }}
+                value={usageFilter.purpose ?? ''}
+                onChange={(event) =>
+                  setUsageFilter({
+                    purpose:
+                      (event.target.value as 'chat' | 'title_generation' | '') || null,
+                  })
+                }
+              >
+                <option value="">全部用途</option>
+                <option value="chat">普通聊天</option>
+                <option value="title_generation">AI 标题生成</option>
               </select>
             </label>
             <label className="field">
@@ -350,6 +372,46 @@ export function UsagePage() {
                 })}
               </section>
 
+              <section className="card card-pad mt-4">
+                <div className="section-title">按请求用途</div>
+                <div className="section-sub">
+                  自动/手动 AI 标题请求与普通聊天请求分别归集；总额始终来自同一批底层请求记录。
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>用途</th>
+                        <th className="num">请求</th>
+                        <th className="num">Token</th>
+                        <th className="num">估算费用</th>
+                        <th>状态</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(['chat', 'title_generation'] as const).map((purpose) => {
+                        const item = stats.byPurpose.find((entry) => entry.purpose === purpose);
+                        return (
+                          <tr key={purpose}>
+                            <td>{PURPOSE_LABEL[purpose]}</td>
+                            <td className="num">{formatTokens(item?.requestCount ?? 0)}</td>
+                            <td className="num">{formatTokens(item?.totalTokens ?? 0)}</td>
+                            <td className="num">{formatUsd(item?.costUsd ?? '0')}</td>
+                            <td>
+                              {item && !item.costUsdComplete ? (
+                                <span className="text-[var(--warning)]">部分未知</span>
+                              ) : (
+                                <span className="text-[var(--success)]">完整</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
               <section className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
                 <div className="card card-pad">
                   <div className="section-title">每日用量</div>
@@ -465,6 +527,7 @@ export function UsagePage() {
                       <tr>
                         <th>时间</th>
                         <th>服务商 / 模型</th>
+                        <th>用途</th>
                         <th>状态</th>
                         <th className="num">输入</th>
                         <th className="num">缓存读</th>
@@ -476,7 +539,7 @@ export function UsagePage() {
                     <tbody>
                       {stats.recentRequests.length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="hint">
+                          <td colSpan={9} className="hint">
                             暂无数据
                           </td>
                         </tr>
@@ -487,6 +550,17 @@ export function UsagePage() {
                             <td>
                               {providerLabel(request.provider)} /{' '}
                               <span className="mono">{request.model}</span>
+                            </td>
+                            <td>
+                              <span
+                                className={`purpose-badge ${
+                                  request.requestPurpose === 'title_generation'
+                                    ? 'purpose-title'
+                                    : 'purpose-chat'
+                                }`}
+                              >
+                                {PURPOSE_LABEL[request.requestPurpose]}
+                              </span>
                             </td>
                             <td>{STATUS_LABEL[request.status] ?? request.status}</td>
                             <td className="num">{formatTokens(request.inputTokens)}</td>

@@ -25,6 +25,36 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+function mockTitleUsage(provider: ProviderId): unknown {
+  if (provider === 'openai') {
+    return {
+      input_tokens: 180,
+      input_tokens_details: {
+        cached_tokens: 0,
+        cache_write_tokens: 0,
+        cache_write_tokens_details: { ttl_30m_tokens: 0, ttl_12h_tokens: 0 },
+      },
+      output_tokens: 12,
+      output_tokens_details: { reasoning_tokens: 0 },
+      total_tokens: 192,
+    };
+  }
+  return {
+    prompt_tokens: 200,
+    prompt_cache_hit_tokens: 0,
+    prompt_cache_miss_tokens: 200,
+    completion_tokens: 12,
+    completion_tokens_details: { reasoning_tokens: 0 },
+    total_tokens: 212,
+  };
+}
+
+function mockTitleText(prompt: string): string {
+  if (prompt.includes('死锁')) return '操作系统的死锁解析';
+  if (prompt.includes('独立统计')) return '独立统计测试会话';
+  return 'TokenLedger 测试标题';
+}
+
 function mockUsage(provider: ProviderId): unknown {
   if (provider === 'openai') {
     return {
@@ -78,8 +108,24 @@ function mockText(provider: ProviderId, lastUserMessage: string): string {
 export function createMockStream(): StreamFunction {
   return async (request: StreamRequest): Promise<StreamResult> => {
     const lastUser = [...request.messages].reverse().find((message) => message.role === 'user');
+    const providerRequestId = `mock-${request.provider}-${request.purpose ?? 'chat'}-${Date.now()}`;
+
+    if (request.purpose === 'title_generation') {
+      await delay(30, request.signal);
+      const title = mockTitleText(lastUser?.content ?? '');
+      request.onTextDelta(title);
+      const usageRaw = mockTitleUsage(request.provider);
+      await delay(20, request.signal);
+      request.onProviderRequestId(providerRequestId);
+      request.onUsage(usageRaw);
+      return {
+        usageRaw,
+        providerRequestId,
+        finishStatus: 'completed',
+      };
+    }
+
     const text = mockText(request.provider, lastUser?.content ?? '（空消息）');
-    const providerRequestId = `mock-${request.provider}-${Date.now()}`;
 
     if (request.capabilities.reasoningEffort) {
       const reasoning = '先理解用户问题，再给出结构化回答，并附带可验证的示例。';

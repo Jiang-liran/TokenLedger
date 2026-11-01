@@ -14,6 +14,7 @@ import type { Store } from './db/repositories';
 import type { KeyStore } from './services/secrets';
 import type { PricingService } from './services/pricing';
 import type { ChatService } from './services/chat';
+import type { TitleService } from './services/titles';
 import type { ModelsService } from './services/models';
 import type { BalanceService } from './services/balance';
 import type { ExportService } from './services/export';
@@ -32,6 +33,7 @@ const nullableRange = z.object({
   to: z.string().min(1).max(60).nullable().optional(),
   provider: providerSchema.nullable().optional(),
   model: z.string().max(200).nullable().optional(),
+  purpose: z.enum(['chat', 'title_generation']).nullable().optional(),
 });
 const moneySchema = z
   .string()
@@ -56,6 +58,7 @@ export interface IpcDeps {
   secrets: KeyStore;
   pricing: PricingService;
   chat: ChatService;
+  titles: TitleService;
   models: ModelsService;
   balance: BalanceService;
   exporter: ExportService;
@@ -229,6 +232,10 @@ export function registerIpc(deps: IpcDeps): void {
     deps.chat.abort(requestId);
   });
 
+  handle(IPC.titleRegenerate, z.object({ conversationId: idSchema }), ({ conversationId }) =>
+    deps.titles.regenerate(conversationId),
+  );
+
   handle(
     IPC.modelsList,
     z.object({ provider: providerSchema, refresh: z.boolean().optional() }),
@@ -302,6 +309,7 @@ export function registerIpc(deps: IpcDeps): void {
       range?.to ?? null,
       range?.provider ?? null,
       range?.model ?? null,
+      range?.purpose ?? null,
     ),
   );
 

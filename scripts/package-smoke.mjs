@@ -43,11 +43,11 @@ try {
   assert.equal(title, 'TokenLedger');
   const meta = await test.page.evaluate(() => window.tokenledger.getMeta());
   assert.equal(meta.testMode, true);
-  assert.equal(meta.version, '1.0.0');
+  assert.equal(meta.version, '1.0.1');
   results.testMode = meta;
 
   const sidebarText = await test.page.locator('.sidebar').innerText();
-  assert.match(sidebarText, /v1\.0\.0/);
+  assert.match(sidebarText, /v1\.0\.1/);
   assert.match(sidebarText, /测试模式/);
 
   const noNode = await test.page.evaluate(() => typeof window.require === 'undefined');
@@ -57,11 +57,15 @@ try {
   await test.page.locator('[data-testid="composer-input"]').fill('打包应用冒烟测试：请回复一段 Markdown。');
   await test.page.locator('[data-testid="composer-input"]').press('Enter');
   await test.page.waitForSelector('[data-testid="stop-button"]', { state: 'detached', timeout: 25000 });
+  await test.page.waitForFunction(
+    () => (document.querySelector('.chat-header-title h1')?.textContent ?? '').includes('TokenLedger 测试标题'),
+    { timeout: 15000 },
+  );
   await test.page.waitForSelector('[data-testid="assistant-message"] .cost-chip', { timeout: 15000 });
   const costText = await test.page.locator('[data-testid="assistant-message"] .cost-chip').last().innerText();
-  assert.match(costText, /5,500 Tokens/);
-  assert.match(costText, /\$0\.004850/);
-  results.checks.push(`打包应用聊天与计费正常：${costText.replace(/\s+/g, ' ')}`);
+  assert.match(costText, /5,692 Tokens/);
+  assert.match(costText, /\$0\.005330/);
+  results.checks.push(`打包应用聊天、AI 标题与计费正常：${costText.replace(/\s+/g, ' ')}`);
   await test.page.screenshot({ path: path.join(screenshots, '09-packaged-test-mode.png') });
   results.checks.push('打包应用截图已保存');
   await test.app.close();

@@ -3,6 +3,7 @@ import type {
   ChatOptions,
   ModelCapabilities,
   ProviderId,
+  RequestPurpose,
 } from '../../shared/types';
 import {
   DEFAULT_DEEPSEEK_BASE_URL,
@@ -18,6 +19,7 @@ import {
 } from '../../shared/providers/errors';
 
 export interface StreamRequest {
+  purpose?: RequestPurpose;
   provider: ProviderId;
   model: string;
   apiKey: string;

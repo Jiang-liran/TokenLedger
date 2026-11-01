@@ -59,8 +59,15 @@ async function screenshot(page, name) {
   console.log(`  screenshot: ${file}`);
 }
 
-async function assistantCount(page) {
-  return page.locator('[data-testid="assistant-message"]').count();
+async function waitForChatTitle(page, expected, timeout = 15000) {
+  await page.waitForFunction(
+    (title) => {
+      const element = document.querySelector('.chat-header-title h1');
+      return !!element && (element.textContent ?? '').includes(title);
+    },
+    expected,
+    { timeout },
+  );
 }
 
 async function sendAndWait(page, text) {
@@ -80,8 +87,10 @@ async function sendAndWait(page, text) {
   await page.waitForSelector('[data-testid="stop-button"]', { state: 'detached', timeout: 20000 });
 }
 
+let app;
+let page;
 try {
-  let { app, page } = await launch();
+  ({ app, page } = await launch());
   record('应用启动并加载主界面');
 
   assert.ok((await page.locator('body').innerText()).includes('已准备好'), '测试模式应已配置密钥');
@@ -105,18 +114,24 @@ try {
   record('流式输出实时增长', `${textA.length} → ${textB.length} 字符`);
 
   await page.waitForSelector('[data-testid="stop-button"]', { state: 'detached', timeout: 25000 });
+  await waitForChatTitle(page, '操作系统的死锁解析');
   const costChip = page.locator('[data-testid="assistant-message"] .cost-chip').last();
   await costChip.waitFor({ timeout: 10000 });
   const costText = await costChip.innerText();
-  assert.match(costText, /5,500 Tokens/);
-  assert.match(costText, /\$0\.004850/);
-  record('第一轮 Token 与费用正确', costText.replace(/\s+/g, ' '));
+  assert.match(costText, /5,692 Tokens/);
+  assert.match(costText, /\$0\.005330/);
+  record('第一轮聊天 + AI 命名 Token 与费用正确', costText.replace(/\s+/g, ' '));
 
   const headerChip = page.locator('.chat-header .chip').filter({ hasText: '本会话' }).first();
   const header1 = await headerChip.innerText();
-  assert.match(header1, /5,500 Tokens/);
-  assert.match(header1, /\$0\.004850/);
-  record('会话累计第一轮正确', header1.replace(/\s+/g, ' '));
+  assert.match(header1, /5,692 Tokens/);
+  assert.match(header1, /\$0\.005330/);
+  record('会话累计包含标题生成费用', header1.replace(/\s+/g, ' '));
+
+  const chatInner = await page.locator('.chat-inner').innerText();
+  assert.doesNotMatch(chatInner, /本会话累计/);
+  assert.match(await page.locator('.sidebar').innerText(), /5,692 Tokens/);
+  record('聊天底部重复的会话累计已移除，顶部与侧边栏保留');
 
   await page.locator('[data-testid="composer-input"]').fill('第二条消息：请继续补充一个例子。');
   await page.locator('[data-testid="composer-input"]').press('Enter');
@@ -127,44 +142,50 @@ try {
     { timeout: 15000 },
   );
   const header2 = await headerChip.innerText();
-  assert.match(header2, /11,000 Tokens/);
-  assert.match(header2, /\$0\.009700/);
+  assert.match(header2, /11,192 Tokens/);
+  assert.match(header2, /\$0\.010180/);
   record('第二轮后会话累计正确', header2.replace(/\s+/g, ' '));
 
-  await page.locator('[data-testid="assistant-message"] .cost-chip').last().click();
-  const details = await page.locator('[data-testid="assistant-message"] .cost-details').last().innerText();
+  await page.locator('[data-testid="assistant-message"] .cost-chip').first().click();
+  const details = await page.locator('[data-testid="assistant-message"] .cost-details').first().innerText();
   assert.match(details, /缓存读取/);
   assert.match(details, /5,200/);
   assert.match(details, /4,500/);
   assert.match(details, /请求/);
-  record('费用明细可展开并显示缓存与输入用量');
+  assert.match(details, /AI 命名/);
+  assert.match(details, /0\.000480/);
+  record('费用明细可展开，区分聊天与 AI 命名请求');
   await screenshot(page, '02-chat-light');
 
   await page.locator('[data-testid="new-chat-button"]').click();
   await page.waitForTimeout(400);
+  assert.match(await page.locator('.chat-header-title h1').innerText(), /新对话/);
+  record('新建对话默认标题为「新对话」');
   await page.locator('[data-testid="composer-input"]').fill('新会话消息：独立统计测试。');
   await page.locator('[data-testid="composer-input"]').press('Enter');
   await page.waitForSelector('[data-testid="stop-button"]', { state: 'detached', timeout: 25000 });
+  await waitForChatTitle(page, '独立统计测试会话');
   const headerNew = await page.locator('.chat-header .chip').filter({ hasText: '本会话' }).first().innerText();
-  assert.match(headerNew, /5,500 Tokens/);
-  assert.match(headerNew, /\$0\.004850/);
+  assert.match(headerNew, /5,692 Tokens/);
+  assert.match(headerNew, /\$0\.005330/);
   record('新建会话独立归零', headerNew.replace(/\s+/g, ' '));
 
-  await page.locator('[data-testid="conversation-item"]').filter({ hasText: '第一条消息：请解释' }).first().click();
+  await page.locator('[data-testid="conversation-item"]').filter({ hasText: '操作系统的死锁解析' }).first().click();
   await page.waitForTimeout(500);
   const reopened = await page.locator('.chat-header .chip').filter({ hasText: '本会话' }).first().innerText();
-  assert.match(reopened, /11,000 Tokens/);
-  assert.match(reopened, /\$0\.009700/);
+  assert.match(reopened, /11,192 Tokens/);
+  assert.match(reopened, /\$0\.010180/);
   record('重新打开历史会话恢复累计', reopened.replace(/\s+/g, ' '));
 
   await page.getByRole('button', { name: '用量统计' }).click();
   await page.waitForSelector('text=会话费用排名', { timeout: 10000 });
   await page.waitForTimeout(400);
   const usageText = await page.locator('.page-body').innerText();
-  assert.match(usageText, /16,500/);
-  assert.match(usageText, /\$0\.014550/);
+  assert.match(usageText, /16,884/);
+  assert.match(usageText, /\$0\.015510/);
   assert.match(usageText, /OpenAI/);
   assert.match(usageText, /DeepSeek/);
+  assert.match(usageText, /AI 标题生成/);
   record('全局统计汇总多会话多请求');
   await screenshot(page, '03-usage-light');
 
@@ -172,16 +193,47 @@ try {
   await page.waitForTimeout(700);
   const filteredDeepSeek = await page.locator('.page-body').innerText();
   assert.match(filteredDeepSeek, /\$0\.000000/);
-  assert.doesNotMatch(filteredDeepSeek, /16,500/);
+  assert.doesNotMatch(filteredDeepSeek, /16,884/);
   await page.getByLabel('服务商筛选').selectOption('');
   await page.waitForTimeout(700);
   const restoredAll = await page.locator('.page-body').innerText();
-  assert.match(restoredAll, /16,500/);
+  assert.match(restoredAll, /16,884/);
   record('按服务商筛选全局统计并可恢复');
 
+  await page.getByLabel('请求用途').selectOption('title_generation');
+  await page.waitForTimeout(700);
+  const filteredTitle = await page.locator('.page-body').innerText();
+  assert.match(filteredTitle, /384/);
+  assert.match(filteredTitle, /\$0\.000960/);
+  assert.match(filteredTitle, /AI 标题生成/);
+  await page.getByLabel('请求用途').selectOption('');
+  await page.waitForTimeout(700);
+  record('按请求用途筛选可区分聊天与 AI 标题生成');
+
   const sidebarText = await page.locator('.sidebar').innerText();
-  assert.match(sidebarText, /v1\.0\.0/);
+  assert.match(sidebarText, /v1\.0\.1/);
   record('版本号显示正确');
+
+  await page.setViewportSize({ width: 1000, height: 700 });
+  await page.waitForTimeout(300);
+  const narrowLayout = await page.evaluate(() => {
+    const scroll = document.querySelector('[data-testid="message-scroll"]')?.getBoundingClientRect();
+    const composer = document.querySelector('.composer')?.getBoundingClientRect();
+    return {
+      scrollBottom: scroll?.bottom ?? 0,
+      composerTop: composer?.top ?? 0,
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
+    };
+  });
+  assert.ok(narrowLayout.overflow <= 1, `窄窗口不应出现水平溢出：${narrowLayout.overflow}`);
+  assert.ok(
+    narrowLayout.scrollBottom <= narrowLayout.composerTop + 1,
+    '消息滚动区不应被输入框遮挡',
+  );
+  await screenshot(page, '12-narrow-window');
+  record('窄窗口下无水平溢出，输入框不遮挡消息区');
+  await page.setViewportSize({ width: 1280, height: 860 });
+  await page.waitForTimeout(300);
 
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.waitForSelector('.settings-wrap', { timeout: 10000 });
@@ -190,7 +242,8 @@ try {
   assert.match(settingsText, /API Key/);
   assert.match(settingsText, /费用与汇率/);
   assert.match(settingsText, /预算提醒/);
-  record('设置页加载 API Key、汇率、预算与数据区');
+  assert.match(settingsText, /AI 智能会话标题/);
+  record('设置页加载 API Key、AI 命名、汇率、预算与数据区');
   await screenshot(page, '04-settings-light');
 
   await page.getByRole('button', { name: '用量统计' }).click();
@@ -283,22 +336,41 @@ try {
   const bodyAfterRestart = await page.locator('body').innerText();
   const conversationCount = await page.locator('[data-testid="conversation-item"]').count();
   assert.ok(conversationCount >= 3, `重启后应保留多个会话，实际 ${conversationCount}`);
-  assert.match(bodyAfterRestart, /第一条消息/);
-  await page.locator('[data-testid="conversation-item"]').filter({ hasText: '第一条消息' }).first().click();
+  assert.match(bodyAfterRestart, /操作系统的死锁解析/);
+  await page.locator('[data-testid="conversation-item"]').filter({ hasText: '操作系统的死锁解析' }).first().click();
   await page.waitForTimeout(600);
   const headerAfterRestart = await page
     .locator('.chat-header .chip')
     .filter({ hasText: '本会话' })
     .first()
     .innerText();
-  assert.match(headerAfterRestart, /11,000 Tokens/);
-  assert.match(headerAfterRestart, /\$0\.009700/);
+  assert.match(headerAfterRestart, /11,192 Tokens/);
+  assert.match(headerAfterRestart, /\$0\.010180/);
   record('重启后聊天与费用完整恢复', headerAfterRestart.replace(/\s+/g, ' '));
   await screenshot(page, '08-restart-light');
 
   const settingsAfter = await page.evaluate(async () => window.tokenledger.getSettings());
   assert.equal(settingsAfter.fx.rate.length > 0, true);
   record('重启后设置可读取');
+
+  // 手动改名，并验证 AI 重新生成标题需要用户主动操作。
+  const moreButton = page.locator('.chat-header button[aria-label="更多会话操作"]').first();
+  await moreButton.click();
+  await page.getByRole('button', { name: '重命名', exact: true }).click();
+  await page.locator('.modal input').fill('手动命名测试');
+  await page.locator('.modal').getByRole('button', { name: '保存', exact: true }).click();
+  await waitForChatTitle(page, '手动命名测试');
+  await page.waitForTimeout(500);
+  assert.match(await page.locator('.chat-header-title h1').innerText(), /手动命名测试/);
+  record('用户手动改名后标题保持，不被自动命名覆盖');
+
+  await moreButton.click();
+  await page.getByRole('button', { name: 'AI 重新生成标题', exact: true }).click();
+  await waitForChatTitle(page, 'TokenLedger 测试标题');
+  const manualHeader = await page.locator('.chat-header .chip').filter({ hasText: '本会话' }).first().innerText();
+  assert.match(manualHeader, /11,384 Tokens/);
+  assert.match(manualHeader, /\$0\.010660/);
+  record('手动 AI 重新生成标题并记录新增费用', manualHeader.replace(/\s+/g, ' '));
 
   // 同一会话内切换服务商，验证按各自价格累计。
   await page.locator('.chat-header .chip').filter({ hasText: 'GPT-6.1 Sol' }).first().click();
@@ -313,7 +385,8 @@ try {
     { timeout: 15000 },
   );
   const mixedHeader = await page.locator('.chat-header .chip').filter({ hasText: '本会话' }).first().innerText();
-  assert.match(mixedHeader, /14,500 Tokens/);
+  assert.match(mixedHeader, /14,884 Tokens/);
+  assert.match(mixedHeader, /\$0\.011117/);
   const mixedChip = page.locator('[data-testid="assistant-message"] .cost-chip').last();
   const mixedText = await mixedChip.innerText();
   assert.match(mixedText, /3,500 Tokens/);
@@ -335,6 +408,13 @@ try {
   console.error('\nUI 测试失败：', results.error);
   process.exitCode = 1;
 } finally {
+  if (app) {
+    try {
+      await app.close();
+    } catch {
+      // 已关闭或失败
+    }
+  }
   results.finishedAt = new Date().toISOString();
   fs.writeFileSync(path.join(resultsDir, 'ui-results.json'), JSON.stringify(results, null, 2));
   console.log(`\n结果已写入 ${path.join(resultsDir, 'ui-results.json')}`);

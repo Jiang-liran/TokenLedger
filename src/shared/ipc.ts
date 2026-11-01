@@ -19,6 +19,8 @@ import type {
   ProviderId,
   RestoreResult,
   RecalculateCostResult,
+  TitleEvent,
+  TitleGenerationResult,
   ChatOptions,
 } from './types';
 import type { AppSettings } from './settings';
@@ -67,6 +69,7 @@ export interface StatsRangePayload {
   to?: string | null;
   provider?: ProviderId | null;
   model?: string | null;
+  purpose?: 'chat' | 'title_generation' | null;
 }
 
 export interface TokenLedgerApi {
@@ -115,8 +118,10 @@ export interface TokenLedgerApi {
   deleteAllData(confirmText: string): Promise<{ ok: boolean }>;
   openExternal(url: string): Promise<{ ok: boolean }>;
   getRecentRequests(limit: number): Promise<ApiRequestRow[]>;
+  regenerateTitle(conversationId: string): Promise<TitleGenerationResult>;
   onChatEvent(listener: (event: ChatStreamEvent) => void): () => void;
   onBudgetAlert(listener: (alert: BudgetAlert) => void): () => void;
+  onTitleEvent(listener: (event: TitleEvent) => void): () => void;
 }
 
 export const IPC = {
@@ -132,6 +137,8 @@ export const IPC = {
   chatRegenerate: 'chat:regenerate',
   chatAbort: 'chat:abort',
   chatEvent: 'chat:event',
+  titleEvent: 'title:event',
+  titleRegenerate: 'title:regenerate',
   budgetAlert: 'budget:alert',
   modelsList: 'models:list',
   keysStatus: 'keys:status',

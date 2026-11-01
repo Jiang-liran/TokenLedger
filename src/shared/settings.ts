@@ -17,9 +17,21 @@ export interface FxSetting {
   effectiveAt: string;
 }
 
+export interface AutoTitleSettings {
+  enabled: boolean;
+  /** 为 true 时标题服务商跟随当前聊天服务商，模型为空则跟随聊天模型 */
+  useCurrentChat: boolean;
+  provider: ProviderId;
+  /** 空字符串表示使用聊天模型（useCurrentChat=true）或该服务商默认模型 */
+  model: string;
+  /** 跨服务商标题生成必须显式同意 */
+  allowCrossProvider: boolean;
+}
+
 export interface AppSettings {
   defaultProvider: ProviderId;
   models: Record<ProviderId, ProviderModelDefaults>;
+  autoTitle: AutoTitleSettings;
   maxContextMessages: number;
   maxContextChars: number;
   fx: FxSetting;
@@ -39,6 +51,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   models: {
     openai: { model: 'gpt-6.1-sol', reasoningEffort: null, thinking: 'default' },
     deepseek: { model: 'deepseek-flash', reasoningEffort: null, thinking: 'default' },
+  },
+  autoTitle: {
+    enabled: true,
+    useCurrentChat: true,
+    provider: 'openai',
+    model: '',
+    allowCrossProvider: false,
   },
   maxContextMessages: 200,
   maxContextChars: 240_000,
@@ -105,6 +124,7 @@ export function mergeSettings(input: unknown): AppSettings {
   const modelsRaw = isRecord(raw.models) ? raw.models : {};
   const fxRaw = isRecord(raw.fx) ? raw.fx : {};
   const budgetRaw = isRecord(raw.budget) ? raw.budget : {};
+  const autoTitleRaw = isRecord(raw.autoTitle) ? raw.autoTitle : {};
 
   const defaultProvider: ProviderId =
     raw.defaultProvider === 'deepseek' ? 'deepseek' : 'openai';
@@ -119,6 +139,17 @@ export function mergeSettings(input: unknown): AppSettings {
     models: {
       openai: mergeProviderDefaults(DEFAULT_SETTINGS.models.openai, modelsRaw.openai),
       deepseek: mergeProviderDefaults(DEFAULT_SETTINGS.models.deepseek, modelsRaw.deepseek),
+    },
+    autoTitle: {
+      enabled: autoTitleRaw.enabled !== false,
+      useCurrentChat: autoTitleRaw.useCurrentChat !== false,
+      provider:
+        autoTitleRaw.provider === 'deepseek' ? 'deepseek' : DEFAULT_SETTINGS.autoTitle.provider,
+      model:
+        typeof autoTitleRaw.model === 'string'
+          ? autoTitleRaw.model.trim().slice(0, 200)
+          : DEFAULT_SETTINGS.autoTitle.model,
+      allowCrossProvider: autoTitleRaw.allowCrossProvider === true,
     },
     maxContextMessages: positiveInt(raw.maxContextMessages, 200, 2, 1000),
     maxContextChars: positiveInt(raw.maxContextChars, 240_000, 4_000, 2_000_000),

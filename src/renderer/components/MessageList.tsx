@@ -10,7 +10,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import type { StoredMessage, TurnView } from '../../shared/types';
-import { formatDateTime, formatTokens, formatUsd } from '../../shared/cost/format';
+import { formatDateTime } from '../../shared/cost/format';
 import { useAppStore } from '../store';
 import { Markdown } from './Markdown';
 import { TurnCost } from './CostDetails';
@@ -311,11 +311,6 @@ export function MessageList() {
             <span>
               本会话有 {detail.stats.unknownCostRequestCount} 次请求费用未知；累计金额只包含可计算的部分，未知费用未被当作 $0。
             </span>
-          </div>
-        ) : null}
-        {detail.stats.costUsd !== '0' ? (
-          <div className="text-center text-[11px] text-[var(--text-tertiary)]">
-            本会话累计 {formatTokens(detail.stats.totalTokens)} Tokens · 估算 {formatUsd(detail.stats.costUsd)}
           </div>
         ) : null}
       </div>

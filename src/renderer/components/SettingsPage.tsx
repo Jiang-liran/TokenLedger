@@ -280,6 +280,130 @@ export function SettingsPage() {
             </p>
           </section>
 
+          {/* ------------------------------------------------------ auto title */}
+          <section className="settings-section">
+            <div className="settings-header">
+              <div>
+                <h2 className="settings-title">AI 智能会话标题</h2>
+                <p className="settings-sub">
+                  新会话首次成功回复后，用一次短请求分析问题与回答并生成标题。每个会话只自动生成一次；旧会话不会被批量重命名。
+                </p>
+              </div>
+              <button className="btn btn-sm" onClick={() => persist(draft)}>
+                <Save size={11} /> 保存
+              </button>
+            </div>
+
+            <div className="toggle-row">
+              <div>
+                <div className="text-[12.5px] font-medium">启用 AI 自动命名</div>
+                <div className="hint">关闭后不会产生标题请求；首轮完成后使用第一条用户消息作为备用标题。</div>
+              </div>
+              <Switch
+                checked={draft.autoTitle.enabled}
+                onChange={(checked) =>
+                  update({ autoTitle: { ...draft.autoTitle, enabled: checked } })
+                }
+                label="启用 AI 自动命名"
+              />
+            </div>
+
+            <div className="toggle-row">
+              <div>
+                <div className="text-[12.5px] font-medium">使用当前聊天服务商</div>
+                <div className="hint">
+                  默认开启：标题请求走当前会话的聊天服务商，模型留空时也使用当前聊天模型，避免跨服务商发送内容。
+                </div>
+              </div>
+              <Switch
+                checked={draft.autoTitle.useCurrentChat}
+                onChange={(checked) =>
+                  update({ autoTitle: { ...draft.autoTitle, useCurrentChat: checked } })
+                }
+                label="标题生成使用当前聊天服务商"
+              />
+            </div>
+
+            <div className="form-grid mt-2">
+              <Field label="标题生成服务商" hint="仅当关闭“使用当前聊天服务商”时生效。">
+                <select
+                  className="select"
+                  value={draft.autoTitle.provider}
+                  disabled={draft.autoTitle.useCurrentChat}
+                  onChange={(event) =>
+                    update({
+                      autoTitle: {
+                        ...draft.autoTitle,
+                        provider: event.target.value as ProviderId,
+                      },
+                    })
+                  }
+                >
+                  <option value="openai">OpenAI</option>
+                  <option value="deepseek">DeepSeek</option>
+                </select>
+              </Field>
+              <Field
+                label="标题生成模型"
+                hint="留空表示使用当前聊天模型（或所选服务商的默认模型）。可选更便宜的模型以降低成本。"
+              >
+                <input
+                  className="input"
+                  list="title-model-options"
+                  value={draft.autoTitle.model}
+                  placeholder="例如 gpt-6-luna / deepseek-flash"
+                  onChange={(event) =>
+                    update({ autoTitle: { ...draft.autoTitle, model: event.target.value } })
+                  }
+                />
+                <datalist id="title-model-options">
+                  {[...new Set([
+                    ...(pricing?.models ?? [])
+                      .filter((model) => model.provider === draft.autoTitle.provider)
+                      .map((model) => model.model),
+                    ...(modelsByProvider[draft.autoTitle.provider]?.models ?? []).map(
+                      (model) => model.id,
+                    ),
+                  ])].map((model) => (
+                    <option key={model} value={model} />
+                  ))}
+                </datalist>
+              </Field>
+            </div>
+
+            {!draft.autoTitle.useCurrentChat ? (
+              <div className="warn-banner" style={{ marginTop: 10 }}>
+                <AlertTriangle size={13} className="mt-0.5 flex-none" />
+                <div>
+                  <div>
+                    {draft.autoTitle.provider !== draft.defaultProvider
+                      ? `标题服务商与默认聊天服务商不同。标题请求会把首轮问题与回答的摘要发送至 ${PROVIDER_LABEL[draft.autoTitle.provider]}。`
+                      : '标题服务商与默认聊天服务商相同；若某个会话切换到了另一服务商，标题请求仍可能跨服务商发送。'}
+                  </div>
+                  <label className="mt-2 flex items-center gap-2 text-[12px]">
+                    <input
+                      type="checkbox"
+                      checked={draft.autoTitle.allowCrossProvider}
+                      onChange={(event) =>
+                        update({
+                          autoTitle: {
+                            ...draft.autoTitle,
+                            allowCrossProvider: event.target.checked,
+                          },
+                        })
+                      }
+                    />
+                    我理解并允许在必要时将标题上下文发送至另一服务商
+                  </label>
+                </div>
+              </div>
+            ) : null}
+
+            <p className="hint" style={{ marginTop: 8 }}>
+              标题请求只包含首轮问题与回答的短摘要（各最多约 900 字符），不会重新发送完整历史。每次请求都会像聊天一样记录官方 usage、价格快照与费用；失败或 usage 缺失会标记为未知，不会计为 0。
+            </p>
+          </section>
+
           {/* ------------------------------------------------------ defaults */}
           <section className="settings-section">
             <div className="settings-header">

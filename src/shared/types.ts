@@ -9,6 +9,13 @@ export type Currency = 'USD' | 'CNY';
 
 export type Role = 'system' | 'user' | 'assistant';
 
+/** 一次 API 请求的业务用途。历史请求默认为 chat。 */
+export type RequestPurpose = 'chat' | 'title_generation';
+
+export type TitleSource = 'default' | 'first_message' | 'ai_auto' | 'ai_manual' | 'manual';
+
+export type TitleMode = 'auto' | 'manual';
+
 export type RequestStatus =
   | 'streaming'
   | 'completed'
@@ -166,6 +173,12 @@ export interface Conversation {
   defaultProvider: ProviderId;
   defaultModel: string;
   systemPrompt: string | null;
+  /** 标题来源：默认占位、首条消息备用、AI 自动、AI 手动、用户手动 */
+  titleSource: TitleSource;
+  titleVersion: number;
+  titleGeneratedAt: string | null;
+  /** 自动标题是否已经尝试过；历史升级会话会预填此字段，避免批量重命名 */
+  autoTitleAttemptedAt: string | null;
 }
 
 export interface StoredMessage {
@@ -197,13 +210,14 @@ export interface ApiRequestRecord {
   id: string;
   providerRequestId: string | null;
   conversationId: string;
-  turnId: string;
+  turnId: string | null;
   assistantMessageId: string | null;
   provider: ProviderId;
   model: string;
   startedAt: string;
   endedAt: string | null;
   status: RequestStatus;
+  requestPurpose: RequestPurpose;
   requestParameters: string | null;
   rawUsage: string | null;
   normalizedUsage: string | null;
@@ -303,6 +317,13 @@ export interface GlobalStats {
   byDay: TimeBucket[];
   byCurrency: { currency: Currency; amount: string; requestCount: number }[];
   recentRequests: ApiRequestRow[];
+  byPurpose: {
+    purpose: RequestPurpose;
+    requestCount: number;
+    totalTokens: number;
+    costUsd: string;
+    costUsdComplete: boolean;
+  }[];
 }
 
 export interface ApiRequestRow {
@@ -311,6 +332,7 @@ export interface ApiRequestRow {
   model: string;
   startedAt: string;
   status: RequestStatus;
+  requestPurpose: RequestPurpose;
   inputTokens: number | null;
   cacheReadTokens: number | null;
   cacheWriteTokens: number | null;
@@ -345,6 +367,48 @@ export interface TurnView {
     calculationStatus: CalculationStatus;
   };
 }
+
+export interface TitleGenerationResult {
+  ok: boolean;
+  conversationId: string;
+  title?: string;
+  requestId?: string;
+  error?: string;
+  mode: TitleMode;
+}
+
+export type TitleEvent =
+  | {
+      type: 'started';
+      conversationId: string;
+      requestId: string;
+      mode: TitleMode;
+    }
+  | {
+      type: 'completed';
+      conversationId: string;
+      requestId: string;
+      mode: TitleMode;
+      title: string;
+      request: ApiRequestRow;
+      conversationStats: ConversationStats;
+      turnView: TurnView | null;
+      applied: boolean;
+    }
+  | {
+      type: 'failed';
+      conversationId: string;
+      requestId: string | null;
+      mode: TitleMode;
+      message: string;
+      fallbackTitle?: string;
+    }
+  | {
+      type: 'fallback';
+      conversationId: string;
+      title: string;
+      reason: string;
+    };
 
 export interface ConversationDetail {
   conversation: Conversation;

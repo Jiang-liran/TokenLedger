@@ -1,6 +1,12 @@
 import { useState } from 'react';
 import { AlertTriangle, ChevronDown } from 'lucide-react';
-import type { ApiRequestRow, ConversationStats, Currency, TurnView } from '../../shared/types';
+import type {
+  ApiRequestRow,
+  ConversationStats,
+  Currency,
+  RequestPurpose,
+  TurnView,
+} from '../../shared/types';
 import { formatAmount, formatDateTime, formatTokens, formatUsd } from '../../shared/cost/format';
 
 function shortId(id: string): string {
@@ -13,6 +19,11 @@ const STATUS_LABEL: Record<string, string> = {
   aborted: '已停止',
   interrupted: '中断',
   streaming: '进行中',
+};
+
+const PURPOSE_LABEL: Record<RequestPurpose, string> = {
+  chat: '聊天',
+  title_generation: 'AI 命名',
 };
 
 function nativeLabel(costs: { currency: Currency; amount: string }[]): string {
@@ -34,7 +45,14 @@ export function TurnCost({ turn }: { turn: TurnView }) {
   const { stats, requests } = turn;
   const unknown = stats.calculationStatus === 'unknown';
   const warning = requestsWarning(requests);
-  const pricingVersion = requests.find((request) => request.pricingVersion)?.pricingVersion;
+  const pricingVersion =
+    [...new Set(requests.map((request) => request.pricingVersion).filter((value): value is string => !!value))].join(
+      ' / ',
+    ) || '—';
+  const pricingBasis =
+    [...new Set(requests.map((request) => request.pricingBasis).filter((value): value is string => !!value))].join(
+      '；',
+    ) || '官方 usage × 价格快照';
 
   if (requests.length === 0) {
     return <span className="cost-chip">本轮尚未产生 API 请求</span>;
@@ -58,6 +76,11 @@ export function TurnCost({ turn }: { turn: TurnView }) {
 
       {open ? (
         <div className="cost-details">
+          <div className="cost-total-line">
+            <span>本轮合计</span>
+            <strong>{formatTokens(stats.totalTokens)} Tokens</strong>
+            <strong>{unknown ? '费用未知' : formatUsd(stats.costUsd)}</strong>
+          </div>
           <div className="cost-details-grid">
             <div>
               <div className="cost-line">
@@ -85,8 +108,10 @@ export function TurnCost({ turn }: { turn: TurnView }) {
                 <span>{stats.requestCount}</span>
               </div>
               <div className="cost-line">
-                <span>本轮总计</span>
-                <span>{formatTokens(stats.totalTokens)} Tokens</span>
+                <span>其中 AI 命名</span>
+                <span>
+                  {requests.filter((request) => request.requestPurpose === 'title_generation').length} 次
+                </span>
               </div>
             </div>
             <div>
@@ -110,8 +135,8 @@ export function TurnCost({ turn }: { turn: TurnView }) {
               </div>
               <div className="cost-line">
                 <span>计价方式</span>
-                <span className="text-right" style={{ maxWidth: 220 }}>
-                  {requests[0]?.pricingBasis ?? '官方 usage × 价格快照'}
+                <span className="text-right" style={{ maxWidth: 260 }} title={pricingBasis}>
+                  {pricingBasis}
                 </span>
               </div>
             </div>
@@ -129,6 +154,7 @@ export function TurnCost({ turn }: { turn: TurnView }) {
               <thead>
                 <tr>
                   <th>请求</th>
+                  <th>用途</th>
                   <th>时间</th>
                   <th>状态</th>
                   <th>输入</th>
@@ -142,8 +168,20 @@ export function TurnCost({ turn }: { turn: TurnView }) {
               <tbody>
                 {requests.map((request) => (
                   <tr key={request.id}>
-                    <td className="mono" title={request.id}>
-                      {shortId(request.id)}
+                    <td className="mono cell-id" title={`${request.id} · ${request.provider}/${request.model}`}>
+                      <span>{shortId(request.id)}</span>
+                      <span className="request-model">{request.model}</span>
+                    </td>
+                    <td>
+                      <span
+                        className={`purpose-badge ${
+                          request.requestPurpose === 'title_generation'
+                            ? 'purpose-title'
+                            : 'purpose-chat'
+                        }`}
+                      >
+                        {PURPOSE_LABEL[request.requestPurpose]}
+                      </span>
                     </td>
                     <td>{formatDateTime(request.startedAt)}</td>
                     <td>{STATUS_LABEL[request.status] ?? request.status}</td>
@@ -156,15 +194,17 @@ export function TurnCost({ turn }: { turn: TurnView }) {
                         ? '未知'
                         : formatAmount(request.costAmount, request.costCurrency ?? 'USD')}
                     </td>
-                    <td className="mono">{request.pricingVersion ?? '—'}</td>
+                    <td className="mono cell-version" title={request.pricingVersion ?? undefined}>
+                      {request.pricingVersion ?? '—'}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
 
-          <p className="hint" style={{ marginTop: 8, marginBottom: 0 }}>
-            费用为根据官方 usage 与请求时价格快照计算的估算值，不代表服务商最终账单。重新生成或重试产生的实际请求费用不会被抹除。
+          <p className="cost-note">
+            费用为根据官方 usage 与请求时价格快照计算的估算值，不代表服务商最终账单。重新生成、重试或 AI 命名产生的实际请求费用均不会被抹除。
           </p>
         </div>
       ) : null}
