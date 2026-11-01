@@ -1,0 +1,47 @@
+appId: com.tokenledger.desktop
+productName: TokenLedger
+copyright: Copyright © 2026 TokenLedger
+directories:
+  output: release
+  buildResources: assets
+files:
+  - dist/**/*
+  - package.json
+  - '!node_modules/**/*'
+asar: true
+compression: normal
+npmRebuild: false
+electronDist: node_modules/electron/dist
+mac:
+  artifactName: TokenLedger-${version}-${arch}.${ext}
+  category: public.app-category.productivity
+  icon: assets/icon.icns
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  type: distribution
+  target:
+    - target: zip
+      arch:
+        - arm64
+    - target: dir
+      arch:
+        - arm64
+  extendInfo:
+    LSMinimumSystemVersion: "12.0"
+    NSHighResolutionCapable: true
+    NSHumanReadableCopyright: Copyright © 2026 TokenLedger
+dmg:
+  title: TokenLedger ${version}
+  artifactName: TokenLedger-${version}-${arch}.${ext}
+  window:
+    width: 540
+    height: 380
+  contents:
+    - x: 140
+      y: 190
+      type: file
+    - x: 400
+      y: 190
+      type: link
+      path: /Applications

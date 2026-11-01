@@ -1,0 +1,53 @@
+{
+  "name": "tokenledger",
+  "productName": "TokenLedger",
+  "version": "1.0.0",
+  "description": "TokenLedger — 面向 OpenAI 与 DeepSeek 的 macOS AI 聊天客户端，精确追踪每次请求、每轮问答、每个会话与全局费用。",
+  "main": "dist/main/index.js",
+  "author": "TokenLedger",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs",
+    "build:main": "node scripts/build-main.mjs",
+    "build:renderer": "vite build",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "start": "electron dist/main/index.js",
+    "ui-test": "node scripts/ui-test.mjs",
+    "package:smoke": "node scripts/package-smoke.mjs",
+    "dist:mac": "npm run build && electron-builder --mac --arm64",
+    "dist:dir": "npm run build && electron-builder --mac --arm64 --dir"
+  },
+  "dependencies": {
+    "decimal.js": "^10.6.0",
+    "katex": "^0.19.1",
+    "lucide-react": "^1.66.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
+    "zod": "^4.6.7",
+    "zustand": "^5.0.16"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.28.2",
+    "playwright-core": "^1.64.1",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}
